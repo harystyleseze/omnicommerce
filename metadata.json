@@ -1,0 +1,5 @@
+{
+  "name": "OmniCommerce AI Agent",
+  "description": "A world-class agentic commerce application that unifies Circle Developer Wallets, Bridge Kit for cross-chain liquidity, and Thirdweb x402 for gasless programmable payments. It uses Gemini 3 Pro to intelligently orchestrate cross-chain purchases, bridging, and settlement on testnet networks.",
+  "requestFramePermissions": []
+}
