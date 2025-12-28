@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect } from 'react';
-import { Bot } from 'lucide-react';
 import { Blockchain, WalletBalance, CommerceItem, Message, AgentAction, AppView } from './types';
 import Dashboard from './components/Dashboard';
 import AgentInterface from './components/AgentInterface';
@@ -16,7 +15,7 @@ const INITIAL_ITEMS: CommerceItem[] = [
     price: '10.00',
     currency: 'USDC',
     targetChain: Blockchain.ETHEREUM_SEPOLIA,
-    image: 'https://picsum.photos/seed/course/800/400'
+    image: 'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?auto=format&fit=crop&q=80&w=800'
   },
   {
     id: 'nft-exclusive-1',
@@ -25,7 +24,7 @@ const INITIAL_ITEMS: CommerceItem[] = [
     price: '25.00',
     currency: 'USDC',
     targetChain: Blockchain.SOLANA_DEVNET,
-    image: 'https://picsum.photos/seed/nft/800/400'
+    image: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=800'
   },
   {
     id: 'ai-utility-1',
@@ -34,7 +33,7 @@ const INITIAL_ITEMS: CommerceItem[] = [
     price: '49.00',
     currency: 'USDC',
     targetChain: Blockchain.POLYGON_AMOY,
-    image: 'https://picsum.photos/seed/sub/800/400'
+    image: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&q=80&w=800'
   }
 ];
 
@@ -50,109 +49,117 @@ const App: React.FC = () => {
   }, [view]);
 
   const refreshBalances = async () => {
-    const data = await checkBalances();
-    setBalances(data);
+    try {
+      const data = await checkBalances();
+      setBalances(data);
+    } catch (e) {
+      console.error("Failed to refresh balances", e);
+    }
   };
 
   const handleSendMessage = async (text: string) => {
-    setMessages(prev => [...prev, { role: 'user', text }]);
+    const userMsg: Message = { role: 'user', text };
+    setMessages(prev => [...prev, userMsg]);
     setIsTyping(true);
 
     try {
-      const history = messages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
-      let response = await getAgentResponse(history, text);
+      const chatHistory = messages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
+      let agentResponse = await getAgentResponse(chatHistory, text);
+      let actions: AgentAction[] = [];
       
-      let currentActions: AgentAction[] = [];
-      
-      // Process tools iteratively to allow for multi-step reasoning in a single "turn"
-      const executeTools = async (res: any) => {
+      const processResponse = async (res: any): Promise<string> => {
         if (res.functionCalls && res.functionCalls.length > 0) {
           for (const call of res.functionCalls) {
-            let action: AgentAction;
-            
+            let resultData: any;
+            let action: AgentAction = { 
+              type: 'BALANCE_CHECK', 
+              status: 'IN_PROGRESS', 
+              description: `Executing ${call.name}...` 
+            };
+
             switch (call.name) {
               case 'checkBalances':
-                action = { type: 'BALANCE_CHECK', status: 'IN_PROGRESS', description: 'Querying Circle W3S API...' };
-                currentActions.push(action);
-                updateUIWithActions(currentActions);
-                await refreshBalances();
+                action = { type: 'BALANCE_CHECK', status: 'IN_PROGRESS', description: 'Checking all Circle Wallets...' };
+                updateActions(actions, action);
+                resultData = await checkBalances();
+                setBalances(resultData);
                 action.status = 'COMPLETED';
                 break;
 
               case 'fundWallet':
-                const { blockchain, amount } = call.args as any;
-                action = { type: 'FUND', status: 'IN_PROGRESS', description: `Requesting faucet: ${amount} USDC on ${blockchain}` };
-                currentActions.push(action);
-                updateUIWithActions(currentActions);
-                const fundRes = await fundWallet(blockchain, amount);
+                const { blockchain, amount } = call.args;
+                action = { type: 'FUND', status: 'IN_PROGRESS', description: `Requesting ${amount} USDC on ${blockchain}` };
+                updateActions(actions, action);
+                resultData = await fundWallet(blockchain as Blockchain, amount);
                 await refreshBalances();
                 action.status = 'COMPLETED';
-                action.txHash = fundRes.txHash;
+                action.txHash = resultData.txHash;
                 break;
 
               case 'initiateBridge':
-                const { fromChain, toChain, amount: bAmount } = call.args as any;
-                action = { type: 'BRIDGE', status: 'IN_PROGRESS', description: `Bridge Kit: Moving ${bAmount} to ${toChain}` };
-                currentActions.push(action);
-                updateUIWithActions(currentActions);
-                const bridgeRes = await initiateBridge(fromChain, toChain, bAmount);
+                const { fromChain, toChain, amount: bAmount } = call.args;
+                action = { type: 'BRIDGE', status: 'IN_PROGRESS', description: `Bridging ${bAmount} USDC: ${fromChain} -> ${toChain}` };
+                updateActions(actions, action);
+                resultData = await initiateBridge(fromChain as Blockchain, toChain as Blockchain, bAmount);
                 await refreshBalances();
                 action.status = 'COMPLETED';
-                action.txHash = bridgeRes.txHash;
-                action.explorerUrl = bridgeRes.explorerUrl;
+                action.txHash = resultData.txHash;
+                action.explorerUrl = resultData.explorerUrl;
                 break;
 
               case 'executePayment':
-                const { itemId, price, network } = call.args as any;
-                action = { type: 'PAYMENT', status: 'IN_PROGRESS', description: `x402 Gasless Settle: ${price} USDC` };
-                currentActions.push(action);
-                updateUIWithActions(currentActions);
-                const payRes = await executePayment(itemId, price, network);
-                setItems(prev => prev.map(item => item.id === itemId ? { ...item, isUnlocked: true } : item));
+                const { itemId, price, network } = call.args;
+                action = { type: 'PAYMENT', status: 'IN_PROGRESS', description: `Settling ${price} USDC on ${network} (Gasless)` };
+                updateActions(actions, action);
+                resultData = await executePayment(itemId, price, network as Blockchain);
+                setItems(prev => prev.map(i => i.id === itemId ? { ...i, isUnlocked: true } : i));
                 await refreshBalances();
                 action.status = 'COMPLETED';
-                action.txHash = payRes.txHash;
-                action.explorerUrl = payRes.explorerUrl;
+                action.txHash = resultData.txHash;
+                action.explorerUrl = resultData.explorerUrl;
                 break;
             }
+            
+            // Re-query agent with tool result to get next step or final text
+            const followUp = await getAgentResponse(
+              [...chatHistory, { role: 'user', parts: [{ text }] }, { role: 'model', parts: [{ text: "Thinking..." }] }],
+              `Tool ${call.name} executed with result: ${JSON.stringify(resultData)}. Please provide the next step or final confirmation.`
+            );
+            return processResponse(followUp);
           }
-          
-          // Re-query agent with new context after tool execution
-          const nextResponse = await getAgentResponse([...history, { role: 'user', parts: [{ text }] }], "The tools have executed. Provide a final update to the user.");
-          return nextResponse.text || "Transaction chain completed.";
         }
-        return res.text || "I'm not sure how to help with that.";
+        return res.text || "I have completed the requested operations.";
       };
 
-      const finalContent = await executeTools(response);
-
-      setMessages(prev => {
-        const last = prev[prev.length - 1];
-        return [...prev.slice(0, -1), { ...last, role: 'model', text: finalContent, actions: currentActions }];
-      });
+      const finalContent = await processResponse(agentResponse);
+      setMessages(prev => [...prev, { role: 'model', text: finalContent, actions }]);
 
     } catch (err) {
       console.error(err);
-      setMessages(prev => [...prev, { role: 'model', text: "Critical system error: Unable to reach Circle or Thirdweb network facilitators." }]);
+      setMessages(prev => [...prev, { role: 'model', text: "I encountered a technical error connecting to the blockchain services. Please check your API keys." }]);
     } finally {
       setIsTyping(false);
     }
   };
 
-  const updateUIWithActions = (actions: AgentAction[]) => {
+  const updateActions = (existing: AgentAction[], next: AgentAction) => {
+    existing.push(next);
+    // Trigger a re-render of the message currently being built
     setMessages(prev => {
       const last = prev[prev.length - 1];
-      if (last.role === 'model') return [...prev.slice(0, -1), { ...last, actions: [...actions] }];
-      return [...prev, { role: 'model', text: "Executing secure transaction sequence...", actions: [...actions] }];
+      if (last && last.role === 'model') {
+        return [...prev.slice(0, -1), { ...last, actions: [...existing] }];
+      }
+      return [...prev, { role: 'model', text: "Processing secure transactions...", actions: [...existing] }];
     });
   };
 
   const handleFund = (blockchain: Blockchain) => {
-    handleSendMessage(`I need some funds on ${blockchain}. Use the faucet for 50 USDC.`);
+    handleSendMessage(`Please fund my ${blockchain} wallet with 50 USDC from the faucet.`);
   };
 
   const handleSelectItem = (item: CommerceItem) => {
-    handleSendMessage(`Buy '${item.name}' for ${item.price} USDC on ${item.targetChain}. Check my balances first and bridge if I have funds on other chains.`);
+    handleSendMessage(`I want to buy '${item.name}' for ${item.price} USDC on ${item.targetChain}. Check my balances and bridge if necessary.`);
   };
 
   if (view === 'LANDING') {
@@ -169,7 +176,7 @@ const App: React.FC = () => {
           onFund={handleFund}
         />
       </main>
-      <aside className="hidden lg:block w-[400px] h-full shrink-0 shadow-2xl">
+      <aside className="hidden lg:block w-[400px] h-full shrink-0 shadow-2xl z-10">
         <AgentInterface messages={messages} onSendMessage={handleSendMessage} isTyping={isTyping} />
       </aside>
     </div>

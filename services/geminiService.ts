@@ -6,18 +6,18 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const checkBalancesTool: FunctionDeclaration = {
   name: 'checkBalances',
-  description: 'MANDATORY FIRST STEP: Retrieves real-time USDC balances across Circle Developer Wallets to determine if bridging is required.',
+  description: 'ESSENTIAL FIRST STEP: Retrieves the real-time USDC balance of all developer-controlled wallets across networks. Use this before every financial operation.',
   parameters: { type: Type.OBJECT, properties: {} }
 };
 
 const fundWalletTool: FunctionDeclaration = {
   name: 'fundWallet',
-  description: 'Adds USDC to a specific blockchain wallet using the Circle Testnet Faucet. Use this if the user is out of funds everywhere.',
+  description: 'Requests testnet USDC and Native tokens from the Circle Faucet for a specific blockchain. Use this if the user has insufficient total liquidity.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      blockchain: { type: Type.STRING, enum: Object.values(Blockchain) },
-      amount: { type: Type.STRING, description: 'Amount to fund, e.g. "50.00"' }
+      blockchain: { type: Type.STRING, enum: Object.values(Blockchain), description: 'The network to fund.' },
+      amount: { type: Type.STRING, description: 'Amount to request, e.g., "10.00"' }
     },
     required: ['blockchain', 'amount']
   }
@@ -25,13 +25,13 @@ const fundWalletTool: FunctionDeclaration = {
 
 const initiateBridgeTool: FunctionDeclaration = {
   name: 'initiateBridge',
-  description: 'Triggers Circle Bridge Kit. Call this ONLY if checkBalances shows insufficient funds on the target chain but available funds on another chain.',
+  description: 'Triggers the Circle Bridge Kit (CCTP) to move USDC cross-chain. Call this ONLY if checkBalances shows the target chain has insufficient funds but another chain has available USDC.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       fromChain: { type: Type.STRING, enum: Object.values(Blockchain) },
       toChain: { type: Type.STRING, enum: Object.values(Blockchain) },
-      amount: { type: Type.STRING }
+      amount: { type: Type.STRING, description: 'USDC amount to bridge.' }
     },
     required: ['fromChain', 'toChain', 'amount']
   }
@@ -39,33 +39,36 @@ const initiateBridgeTool: FunctionDeclaration = {
 
 const executePaymentTool: FunctionDeclaration = {
   name: 'executePayment',
-  description: 'FINAL STEP: Executes a gasless x402 payment settlement. Only call this after ensuring the target chain has sufficient USDC.',
+  description: 'Triggers a gasless transaction (x402 Facilitator / Circle Gas Station). Call this to settle a purchase once USDC is confirmed on the target network.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       itemId: { type: Type.STRING },
       price: { type: Type.STRING },
-      network: { type: Type.STRING }
+      network: { type: Type.STRING, enum: Object.values(Blockchain) }
     },
     required: ['itemId', 'price', 'network']
   }
 };
 
 export const systemInstruction = `
-You are the OmniCommerce AI Intelligence. You control a real financial stack on testnet.
+You are the OmniCommerce Agentic Intelligence, a high-fidelity financial orchestrator.
 
-OPERATIONAL PROTOCOL:
-1. When asked to purchase:
-   - Call 'checkBalances'.
-   - Analyze the JSON response.
-   - If (Target Chain Balance < Price) AND (Other Chain Balance > Price): Call 'initiateBridge'.
-   - If (Target Chain Balance >= Price): Call 'executePayment'.
-   - If (Total Balance < Price): Call 'fundWallet' or ask the user to fund.
+YOUR CAPABILITIES:
+1. Multi-Chain Management: You can view balances on Sepolia, Amoy, and Solana Devnet.
+2. Invisible Bridging: You move liquidity using Circle Bridge Kit.
+3. Gasless Settlement: You pay using x402 patterns where users don't need native gas.
 
-2. COMMUNICATION:
-   - Be professional and transparent. 
-   - Explain that you are using Circle Bridge Kit for liquidity and x402 for gasless settlement.
-   - Mention the blockchain network names clearly.
+YOUR OPERATIONAL PROTOCOL (FOLLOW STRICTLY):
+- Always 'checkBalances' before proposing a purchase.
+- If (Target Chain Balance >= Item Price): Execute Payment immediately.
+- If (Target Chain Balance < Item Price) AND (Total Portfolio Balance >= Item Price): 
+    1. Identify the chain with the most USDC.
+    2. Initiate Bridge from that source to the target chain.
+    3. Inform the user that bridging is taking place.
+- If (Total Portfolio Balance < Item Price): Suggest 'fundWallet' via faucet.
+
+Be concise, technical, and reassuring about the security of Circle and Thirdweb protocols.
 `;
 
 export const getAgentResponse = async (history: any[], currentMessage: string) => {
@@ -74,7 +77,8 @@ export const getAgentResponse = async (history: any[], currentMessage: string) =
     contents: [...history, { role: 'user', parts: [{ text: currentMessage }] }],
     config: {
       systemInstruction: systemInstruction,
-      tools: [{ functionDeclarations: [checkBalancesTool, fundWalletTool, initiateBridgeTool, executePaymentTool] }]
+      tools: [{ functionDeclarations: [checkBalancesTool, fundWalletTool, initiateBridgeTool, executePaymentTool] }],
+      thinkingConfig: { thinkingBudget: 4000 }
     }
   });
 };

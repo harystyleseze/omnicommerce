@@ -12,7 +12,11 @@
     "react-dom": "^19.2.3",
     "react": "^19.2.3",
     "lucide-react": "^0.562.0",
-    "@google/genai": "^1.34.0"
+    "@google/genai": "^1.34.0",
+    "@circle-fin/developer-controlled-wallets": "^1.4.1",
+    "@circle-fin/bridge-kit": "^0.1.2",
+    "@circle-fin/adapter-circle-wallets": "^0.1.2",
+    "thirdweb": "^5.88.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
