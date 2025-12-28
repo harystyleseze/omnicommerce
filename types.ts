@@ -20,10 +20,11 @@ export interface CommerceItem {
   currency: string;
   targetChain: Blockchain;
   image: string;
+  isUnlocked?: boolean;
 }
 
 export interface AgentAction {
-  type: 'BALANCE_CHECK' | 'BRIDGE' | 'PAYMENT' | 'WALLET_CREATE';
+  type: 'BALANCE_CHECK' | 'BRIDGE' | 'PAYMENT' | 'WALLET_CREATE' | 'FUND';
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
   description: string;
   txHash?: string;
@@ -35,3 +36,5 @@ export interface Message {
   text: string;
   actions?: AgentAction[];
 }
+
+export type AppView = 'LANDING' | 'DASHBOARD';

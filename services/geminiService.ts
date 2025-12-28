@@ -4,60 +4,68 @@ import { Blockchain } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Tool 1: Circle Wallets Balance Check
 const checkBalancesTool: FunctionDeclaration = {
   name: 'checkBalances',
-  description: 'Retrieves real-time USDC balances across Ethereum Sepolia, Solana Devnet, and Polygon Amoy using Circle Developer Wallets API.',
+  description: 'MANDATORY FIRST STEP: Retrieves real-time USDC balances across Circle Developer Wallets to determine if bridging is required.',
+  parameters: { type: Type.OBJECT, properties: {} }
+};
+
+const fundWalletTool: FunctionDeclaration = {
+  name: 'fundWallet',
+  description: 'Adds USDC to a specific blockchain wallet using the Circle Testnet Faucet. Use this if the user is out of funds everywhere.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      walletSetId: { type: Type.STRING, description: 'Optional: Specific wallet set to check.' }
-    }
+      blockchain: { type: Type.STRING, enum: Object.values(Blockchain) },
+      amount: { type: Type.STRING, description: 'Amount to fund, e.g. "50.00"' }
+    },
+    required: ['blockchain', 'amount']
   }
 };
 
-// Tool 2: Circle Bridge Kit Orchestration
 const initiateBridgeTool: FunctionDeclaration = {
   name: 'initiateBridge',
-  description: 'Uses Circle Bridge Kit to transfer USDC between blockchains. Essential when funds are on the wrong chain for a purchase.',
+  description: 'Triggers Circle Bridge Kit. Call this ONLY if checkBalances shows insufficient funds on the target chain but available funds on another chain.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       fromChain: { type: Type.STRING, enum: Object.values(Blockchain) },
       toChain: { type: Type.STRING, enum: Object.values(Blockchain) },
-      amount: { type: Type.STRING, description: 'Amount of USDC (e.g., "10.00")' }
+      amount: { type: Type.STRING }
     },
     required: ['fromChain', 'toChain', 'amount']
   }
 };
 
-// Tool 3: Thirdweb x402 Payment Facilitator
 const executePaymentTool: FunctionDeclaration = {
   name: 'executePayment',
-  description: 'Triggers a gasless x402 payment settlement via the Thirdweb Facilitator. Uses EIP-7702 for gasless execution on EVM.',
+  description: 'FINAL STEP: Executes a gasless x402 payment settlement. Only call this after ensuring the target chain has sufficient USDC.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       itemId: { type: Type.STRING },
       price: { type: Type.STRING },
-      network: { type: Type.STRING, description: 'The network where the payment is settled.' }
+      network: { type: Type.STRING }
     },
     required: ['itemId', 'price', 'network']
   }
 };
 
 export const systemInstruction = `
-You are the OmniCommerce AI Agent. You manage a real commerce stack:
-1. Circle Developer Wallets (Asset Storage)
-2. Circle Bridge Kit (Cross-chain Liquidity)
-3. Thirdweb x402 (Gasless Settlement)
+You are the OmniCommerce AI Intelligence. You control a real financial stack on testnet.
 
-PROTOCOL:
-- When a user wants to buy something, FIRST check balances on all chains.
-- If the target chain has insufficient funds, find a source chain with funds and use 'initiateBridge'.
-- Once funds are ready, use 'executePayment'.
-- NEVER make up transaction hashes. Use the data provided by the tools.
-- Explain the benefits of x402 (gasless) and Bridge Kit (interoperability) to the user.
+OPERATIONAL PROTOCOL:
+1. When asked to purchase:
+   - Call 'checkBalances'.
+   - Analyze the JSON response.
+   - If (Target Chain Balance < Price) AND (Other Chain Balance > Price): Call 'initiateBridge'.
+   - If (Target Chain Balance >= Price): Call 'executePayment'.
+   - If (Total Balance < Price): Call 'fundWallet' or ask the user to fund.
+
+2. COMMUNICATION:
+   - Be professional and transparent. 
+   - Explain that you are using Circle Bridge Kit for liquidity and x402 for gasless settlement.
+   - Mention the blockchain network names clearly.
 `;
 
 export const getAgentResponse = async (history: any[], currentMessage: string) => {
@@ -66,7 +74,7 @@ export const getAgentResponse = async (history: any[], currentMessage: string) =
     contents: [...history, { role: 'user', parts: [{ text: currentMessage }] }],
     config: {
       systemInstruction: systemInstruction,
-      tools: [{ functionDeclarations: [checkBalancesTool, initiateBridgeTool, executePaymentTool] }]
+      tools: [{ functionDeclarations: [checkBalancesTool, fundWalletTool, initiateBridgeTool, executePaymentTool] }]
     }
   });
 };

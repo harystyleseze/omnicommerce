@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { Bot } from 'lucide-react';
-import { Blockchain, WalletBalance, CommerceItem, Message, AgentAction } from './types';
+import { Blockchain, WalletBalance, CommerceItem, Message, AgentAction, AppView } from './types';
 import Dashboard from './components/Dashboard';
 import AgentInterface from './components/AgentInterface';
-import { checkBalances, initiateBridge, executePayment } from './services/circleService';
+import LandingPage from './components/LandingPage';
+import { checkBalances, initiateBridge, executePayment, fundWallet } from './services/circleService';
 import { getAgentResponse } from './services/geminiService';
 
 const INITIAL_ITEMS: CommerceItem[] = [
@@ -38,13 +39,15 @@ const INITIAL_ITEMS: CommerceItem[] = [
 ];
 
 const App: React.FC = () => {
+  const [view, setView] = useState<AppView>('LANDING');
   const [balances, setBalances] = useState<WalletBalance[]>([]);
+  const [items, setItems] = useState<CommerceItem[]>(INITIAL_ITEMS);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
 
   useEffect(() => {
-    refreshBalances();
-  }, []);
+    if (view === 'DASHBOARD') refreshBalances();
+  }, [view]);
 
   const refreshBalances = async () => {
     const data = await checkBalances();
@@ -59,85 +62,116 @@ const App: React.FC = () => {
       const history = messages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
       let response = await getAgentResponse(history, text);
       
-      // Process potential tool calls in a loop
       let currentActions: AgentAction[] = [];
-      let currentResponseText = response.text || "";
+      
+      // Process tools iteratively to allow for multi-step reasoning in a single "turn"
+      const executeTools = async (res: any) => {
+        if (res.functionCalls && res.functionCalls.length > 0) {
+          for (const call of res.functionCalls) {
+            let action: AgentAction;
+            
+            switch (call.name) {
+              case 'checkBalances':
+                action = { type: 'BALANCE_CHECK', status: 'IN_PROGRESS', description: 'Querying Circle W3S API...' };
+                currentActions.push(action);
+                updateUIWithActions(currentActions);
+                await refreshBalances();
+                action.status = 'COMPLETED';
+                break;
 
-      if (response.functionCalls && response.functionCalls.length > 0) {
-        for (const call of response.functionCalls) {
-          if (call.name === 'checkBalances') {
-            currentActions.push({ type: 'BALANCE_CHECK', status: 'IN_PROGRESS', description: 'Querying Circle Wallets...' });
-            setMessages(prev => [...prev.slice(0, -1), { role: 'user', text }, { role: 'model', text: "Checking your cross-chain assets...", actions: [...currentActions] }]);
-            const result = await checkBalances();
-            setBalances(result);
-            currentActions[currentActions.length - 1].status = 'COMPLETED';
-          } 
+              case 'fundWallet':
+                const { blockchain, amount } = call.args as any;
+                action = { type: 'FUND', status: 'IN_PROGRESS', description: `Requesting faucet: ${amount} USDC on ${blockchain}` };
+                currentActions.push(action);
+                updateUIWithActions(currentActions);
+                const fundRes = await fundWallet(blockchain, amount);
+                await refreshBalances();
+                action.status = 'COMPLETED';
+                action.txHash = fundRes.txHash;
+                break;
+
+              case 'initiateBridge':
+                const { fromChain, toChain, amount: bAmount } = call.args as any;
+                action = { type: 'BRIDGE', status: 'IN_PROGRESS', description: `Bridge Kit: Moving ${bAmount} to ${toChain}` };
+                currentActions.push(action);
+                updateUIWithActions(currentActions);
+                const bridgeRes = await initiateBridge(fromChain, toChain, bAmount);
+                await refreshBalances();
+                action.status = 'COMPLETED';
+                action.txHash = bridgeRes.txHash;
+                action.explorerUrl = bridgeRes.explorerUrl;
+                break;
+
+              case 'executePayment':
+                const { itemId, price, network } = call.args as any;
+                action = { type: 'PAYMENT', status: 'IN_PROGRESS', description: `x402 Gasless Settle: ${price} USDC` };
+                currentActions.push(action);
+                updateUIWithActions(currentActions);
+                const payRes = await executePayment(itemId, price, network);
+                setItems(prev => prev.map(item => item.id === itemId ? { ...item, isUnlocked: true } : item));
+                await refreshBalances();
+                action.status = 'COMPLETED';
+                action.txHash = payRes.txHash;
+                action.explorerUrl = payRes.explorerUrl;
+                break;
+            }
+          }
           
-          if (call.name === 'initiateBridge') {
-            const { fromChain, toChain, amount } = call.args as any;
-            currentActions.push({ type: 'BRIDGE', status: 'IN_PROGRESS', description: `Bridge Kit: ${fromChain} -> ${toChain}` });
-            setMessages(prev => {
-              const last = prev[prev.length - 1];
-              last.actions = [...currentActions];
-              return [...prev.slice(0, -1), last];
-            });
-            const bridge = await initiateBridge(fromChain, toChain, amount);
-            currentActions[currentActions.length - 1].status = 'COMPLETED';
-            currentActions[currentActions.length - 1].txHash = bridge.txHash;
-            currentActions[currentActions.length - 1].explorerUrl = bridge.explorerUrl;
-          }
-
-          if (call.name === 'executePayment') {
-            const { itemId, price, network } = call.args as any;
-            currentActions.push({ type: 'PAYMENT', status: 'IN_PROGRESS', description: `Settling x402 gasless payment on ${network}` });
-            setMessages(prev => {
-              const last = prev[prev.length - 1];
-              last.actions = [...currentActions];
-              return [...prev.slice(0, -1), last];
-            });
-            const payment = await executePayment(itemId, price, network);
-            currentActions[currentActions.length - 1].status = 'COMPLETED';
-            currentActions[currentActions.length - 1].txHash = payment.txHash;
-            currentActions[currentActions.length - 1].explorerUrl = payment.explorerUrl;
-          }
+          // Re-query agent with new context after tool execution
+          const nextResponse = await getAgentResponse([...history, { role: 'user', parts: [{ text }] }], "The tools have executed. Provide a final update to the user.");
+          return nextResponse.text || "Transaction chain completed.";
         }
+        return res.text || "I'm not sure how to help with that.";
+      };
 
-        // Final summary response after tools
-        const finalResponse = await getAgentResponse([...history, { role: 'user', parts: [{ text }] }], "I have completed the operations. Please summarize the status.");
-        currentResponseText = finalResponse.text || "Operations complete.";
-      }
+      const finalContent = await executeTools(response);
 
       setMessages(prev => {
         const last = prev[prev.length - 1];
-        return [...prev.slice(0, -1), { ...last, role: 'model', text: currentResponseText, actions: currentActions }];
+        return [...prev.slice(0, -1), { ...last, role: 'model', text: finalContent, actions: currentActions }];
       });
 
     } catch (err) {
       console.error(err);
-      setMessages(prev => [...prev, { role: 'model', text: "The network facilitator is currently unavailable." }]);
+      setMessages(prev => [...prev, { role: 'model', text: "Critical system error: Unable to reach Circle or Thirdweb network facilitators." }]);
     } finally {
       setIsTyping(false);
-      refreshBalances();
     }
   };
 
-  const handleSelectItem = (item: CommerceItem) => {
-    handleSendMessage(`I want to buy '${item.name}' for ${item.price} USDC. It is on ${item.targetChain}. Use my Amoy funds if needed.`);
+  const updateUIWithActions = (actions: AgentAction[]) => {
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      if (last.role === 'model') return [...prev.slice(0, -1), { ...last, actions: [...actions] }];
+      return [...prev, { role: 'model', text: "Executing secure transaction sequence...", actions: [...actions] }];
+    });
   };
+
+  const handleFund = (blockchain: Blockchain) => {
+    handleSendMessage(`I need some funds on ${blockchain}. Use the faucet for 50 USDC.`);
+  };
+
+  const handleSelectItem = (item: CommerceItem) => {
+    handleSendMessage(`Buy '${item.name}' for ${item.price} USDC on ${item.targetChain}. Check my balances first and bridge if I have funds on other chains.`);
+  };
+
+  if (view === 'LANDING') {
+    return <LandingPage onStart={() => setView('DASHBOARD')} />;
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
       <main className="flex-1 overflow-hidden relative">
-        <Dashboard balances={balances} items={INITIAL_ITEMS} onSelectItem={handleSelectItem} />
+        <Dashboard 
+          balances={balances} 
+          items={items} 
+          onSelectItem={handleSelectItem} 
+          onFund={handleFund}
+        />
       </main>
       <aside className="hidden lg:block w-[400px] h-full shrink-0 shadow-2xl">
         <AgentInterface messages={messages} onSendMessage={handleSendMessage} isTyping={isTyping} />
       </aside>
-      <div className="lg:hidden fixed bottom-6 right-6">
-        <button className="w-14 h-14 bg-indigo-600 rounded-full shadow-xl flex items-center justify-center text-white">
-          <Bot className="w-6 h-6" />
-        </button>
-      </div>
     </div>
   );
 };
